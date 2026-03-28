@@ -2,6 +2,8 @@ require 'net/ssh'
 require 'net/scp'
 require 'securerandom'
 require 'socket'
+require 'net/http'
+require 'json'
 require_relative 'fleh_mesh/ui'
 
 module FlehMesh
@@ -14,13 +16,21 @@ module FlehMesh
       File.write(config_path, { domain: domain, token: token }.to_json)
       
       FlehMesh::UI.step("Updating DuckDNS record...")
-      res = `curl -s "https://www.duckdns.org/update?domains=#{domain}&token=#{token}&ip="`
       
-      if res == "OK"
-        FlehMesh::UI.success("Identity is live at #{domain}.duckdns.org!")
-      else
-        FlehMesh::UI.error("Failed to update: #{res}")
+      url = "https://www.duckdns.org/update?domains=#{domain}&token=#{token}&ip="
+      uri = URI(url)
+      
+      begin
+        response = Net::HTTP.get(uri)
+        if response == "OK"
+          FlehMesh::UI.success("Identity is live at #{domain}.duckdns.org!")
+        else
+          FlehMesh::UI.error("Failed to update: #{response}")
+        end
+      rescue => e
+        FlehMesh::UI.error("Network error: #{e.message}")
       end
+      
       FlehMesh::UI.footer
     end
 
@@ -29,10 +39,11 @@ module FlehMesh
       FlehMesh::UI.info("Internal: 22 -> External: #{port}")
       
       FlehMesh::UI.step("Discovering router via UPnP...")
-      # Attempt to use upnpc if available
       if system("which upnpc > /dev/null 2>&1")
-        res = `upnpc -a $(hostname -I | awk '{print $1}') 22 #{port} TCP`
-        if res =~ /mapping successful/i
+        # Try to get the internal IP address
+        internal_ip = Socket.ip_address_list.find { |ai| ai.ipv4? && !ai.ipv4_loopback? }.ip_address
+        res = `upnpc -a #{internal_ip} 22 #{port} TCP`
+        if res =~ /mapping successful/i || res =~ /Redirecting/i
           FlehMesh::UI.success("Router punched successfully!")
         else
           FlehMesh::UI.error("Router failed to punch: #{res}")
@@ -66,22 +77,18 @@ module FlehMesh
       FlehMesh::UI.header("PRE-FLIGHT CHECK")
       
       results = []
-      
-      # SSH Client
       if system("ssh -V > /dev/null 2>&1")
         results << ["SSH Client", "âœ“ Installed".colorize(:green)]
       else
         results << ["SSH Client", "âœ˜ Missing".colorize(:red)]
       end
 
-      # SSH Keygen
       if system("ssh-keygen -V > /dev/null 2>&1")
         results << ["SSH Keygen", "âœ“ Installed".colorize(:green)]
       else
         results << ["SSH Keygen", "âœ˜ Missing".colorize(:red)]
       end
 
-      # Systemd
       if system("systemctl --version > /dev/null 2>&1")
         results << ["Systemd", "âœ“ Available".colorize(:green)]
       else
@@ -96,7 +103,6 @@ module FlehMesh
       FlehMesh::UI.header("MESH HEALTH DASHBOARD")
       
       FlehMesh::UI.spinner("Probing Lighthouse Relay (#{ip})...") do |s|
-        # Check if port is open
         begin
           Socket.tcp(ip, port, connect_timeout: 5)
           s.update(title: "Lighthouse Port #{port}: #{'OPEN'.colorize(:green)}")
@@ -115,15 +121,12 @@ module FlehMesh
 
       Net::SSH.start(ip, user) do |ssh|
         issues = []
-        
-        # Check for PasswordAuth
         if ssh.exec!("grep '^PasswordAuthentication' /etc/ssh/sshd_config") =~ /yes/
           issues << ["Password Auth", "ENABLED".colorize(:red), "Disable for security"]
         else
           issues << ["Password Auth", "DISABLED".colorize(:green), "Good"]
         end
 
-        # Check for RootLogin
         if ssh.exec!("grep '^PermitRootLogin' /etc/ssh/sshd_config") =~ /yes/
           issues << ["Root Login", "ENABLED".colorize(:yellow), "Consider disabling"]
         else
@@ -242,8 +245,8 @@ module FlehMesh
       puts " #{'SHELLY SSH CONFIGURATION'.colorize(:white).bold}"
       puts "-" * 60
       puts " 1. Connection: #{'SSH'.colorize(:cyan)}"
-      puts " 2. Host: #{'[YOUR_LIGHTHOUSE_IP]'.colorize(:yellow)}"
-      puts " 3. Port: #{'2222'.colorize(:green)}"
+      puts " 2. Host: #{'[YOUR_IDENTITY_DOMAIN].duckdns.org'.colorize(:yellow)}"
+      puts " 3. Port: #{'54321'.colorize(:green)}"
       puts " 4. User: #{ENV['USER'].colorize(:green)}"
       puts " 5. Private Key: #{key_path.colorize(:light_black)}"
       puts "-" * 60

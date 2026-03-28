@@ -1,10 +1,9 @@
 source 'https://rubygems.org'
+
 gem 'thor'
 gem 'net-ssh'
 gem 'net-scp'
 gem 'colorize'
-gem 'tty-prompt'
 gem 'tty-table'
 gem 'tty-spinner'
-gem 'rest-client'
-gem 'mini_upnpc'
+gem 'tty-prompt'
