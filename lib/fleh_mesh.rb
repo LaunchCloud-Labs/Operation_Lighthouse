@@ -10,6 +10,11 @@ require_relative 'fleh_mesh/ui'
 module FlehMesh
   module Logic
     CONFIG_FILE = File.expand_path("~/.fleh_mesh.json")
+    
+    # --- LaunchCloud Sovereign Defaults ---
+    DEFAULT_DOMAIN = "launchcloud"
+    DEFAULT_TOKEN  = "7b27785e-6725-4c47-8fb3-54264301de13"
+    # --------------------------------------
 
     def self.save_state(data)
       state = load_state.merge(data)
@@ -17,31 +22,36 @@ module FlehMesh
     end
 
     def self.load_state
-      return {} unless File.exist?(CONFIG_FILE)
-      JSON.parse(File.read(CONFIG_FILE), symbolize_names: true)
-    rescue
-      {}
+      base_state = { domain: DEFAULT_DOMAIN, token: DEFAULT_TOKEN, ghost_port: 54321, users: [] }
+      
+      if File.exist?(CONFIG_FILE)
+        begin
+          saved_state = JSON.parse(File.read(CONFIG_FILE), symbolize_names: true)
+          return base_state.merge(saved_state)
+        rescue
+          return base_state
+        end
+      end
+      
+      base_state
     end
 
     def self.check
       FlehMesh::UI.header("PRE-FLIGHT CHECK")
       results = []
       
-      # SSH Client
       if system("ssh -V > /dev/null 2>&1")
         results << ["SSH Client", "âœ“".colorize(:green)]
       else
         results << ["SSH Client", "âœ˜".colorize(:red)]
       end
 
-      # SSH Keygen
       if system("ssh-keygen -V > /dev/null 2>&1")
         results << ["SSH Keygen", "âœ“".colorize(:green)]
       else
         results << ["SSH Keygen", "âœ˜".colorize(:red)]
       end
 
-      # UPnP Check
       if system("which upnpc > /dev/null 2>&1")
         results << ["UPnP (Router Punch)", "âœ“ Ready".colorize(:green)]
       else
@@ -81,7 +91,6 @@ module FlehMesh
       
       if system("which upnpc > /dev/null 2>&1")
         FlehMesh::UI.step("Locating router and creating mapping...")
-        # Get internal IP more robustly
         internal_ip = `hostname -I 2>/dev/null | awk '{print $1}'`.strip
         internal_ip = `ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1`.strip if internal_ip.empty?
         
@@ -100,10 +109,9 @@ module FlehMesh
     def self.add_user(name, pin)
       FlehMesh::UI.header("NEW EMPLOYEE PROVISION")
       state = load_state
-      domain = state[:domain] || "launchcloud"
-      port = state[:ghost_port] || 54321
+      domain = state[:domain]
+      port = state[:ghost_port]
 
-      # Fix the path to be absolute in the project folder
       key_dir = File.join(File.expand_path("../..", __FILE__), "keys", name)
       FileUtils.mkdir_p(key_dir)
       key_path = File.join(key_dir, "id_fleh_#{name}")
@@ -114,7 +122,6 @@ module FlehMesh
       public_key = File.read("#{key_path}.pub").strip
       
       FlehMesh::UI.step("Authorizing access on local system...")
-      # Ensure .ssh exists for current user
       ssh_dir = File.expand_path("~/.ssh")
       FileUtils.mkdir_p(ssh_dir)
       FileUtils.chmod(0700, ssh_dir)
@@ -123,7 +130,6 @@ module FlehMesh
       File.open(auth_file, "a") { |f| f.puts("\n# Fleh Mesh: #{name}\n#{public_key}") }
       FileUtils.chmod(0600, auth_file)
       
-      # Save user
       users = state[:users] || []
       users << { name: name, created_at: Time.now }
       save_state({ users: users })
@@ -165,7 +171,7 @@ module FlehMesh
     def self.check_live_status
       state = load_state
       domain = state[:domain]
-      port = state[:ghost_port] || 54321
+      port = state[:ghost_port]
       
       status = { identity: :offline, ghostport: :offline }
       if domain
