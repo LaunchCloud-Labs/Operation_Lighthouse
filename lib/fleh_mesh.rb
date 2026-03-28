@@ -23,8 +23,39 @@ module FlehMesh
       {}
     end
 
+    def self.check
+      FlehMesh::UI.header("PRE-FLIGHT CHECK")
+      results = []
+      
+      # SSH Client
+      if system("ssh -V > /dev/null 2>&1")
+        results << ["SSH Client", "âœ“".colorize(:green)]
+      else
+        results << ["SSH Client", "âœ˜".colorize(:red)]
+      end
+
+      # SSH Keygen
+      if system("ssh-keygen -V > /dev/null 2>&1")
+        results << ["SSH Keygen", "âœ“".colorize(:green)]
+      else
+        results << ["SSH Keygen", "âœ˜".colorize(:red)]
+      end
+
+      # UPnP Check
+      if system("which upnpc > /dev/null 2>&1")
+        results << ["UPnP (Router Punch)", "âœ“ Ready".colorize(:green)]
+      else
+        results << ["UPnP (Router Punch)", "âœ˜ Not Installed".colorize(:yellow)]
+      end
+
+      FlehMesh::UI.table(["Component", "Status"], results)
+      FlehMesh::UI.footer
+    end
+
     def self.setup_id(domain, token)
-      FlehMesh::UI.header("CONFIGURING SOVEREIGN IDENTITY")
+      FlehMesh::UI.header("IDENTITY CONFIGURATION")
+      FlehMesh::UI.info("Domain: #{domain}.duckdns.org")
+      
       save_state({ domain: domain, token: token })
       
       FlehMesh::UI.step("Updating DuckDNS record...")
@@ -43,80 +74,90 @@ module FlehMesh
     end
 
     def self.punch(port = 54321)
-      FlehMesh::UI.header("GHOSTPORT: ROUTER PUNCH-THROUGH")
+      FlehMesh::UI.header("GHOSTPORT PUNCH")
+      FlehMesh::UI.info("Forwarding External #{port} -> Internal 22")
+      
       save_state({ ghost_port: port })
       
-      FlehMesh::UI.step("Discovering router via UPnP...")
       if system("which upnpc > /dev/null 2>&1")
-        internal_ip = Socket.ip_address_list.find { |ai| ai.ipv4? && !ai.ipv4_loopback? }.ip_address
+        FlehMesh::UI.step("Locating router and creating mapping...")
+        # Get internal IP more robustly
+        internal_ip = `hostname -I 2>/dev/null | awk '{print $1}'`.strip
+        internal_ip = `ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1`.strip if internal_ip.empty?
+        
         res = `upnpc -a #{internal_ip} 22 #{port} TCP`
         if res =~ /mapping successful/i || res =~ /Redirecting/i
-          FlehMesh::UI.success("Router punched successfully!")
+          FlehMesh::UI.success("GhostPort is open and punching!")
         else
-          FlehMesh::UI.error("Router failed to punch.")
+          FlehMesh::UI.error("Router rejected mapping. Try manual forwarding.")
         end
       else
-        FlehMesh::UI.error("Missing 'upnpc' tool. Please 'brew install miniupnpc'.")
+        FlehMesh::UI.error("UPnP Tool Missing. (brew install miniupnpc)")
       end
       FlehMesh::UI.footer
     end
 
     def self.add_user(name, pin)
-      FlehMesh::UI.header("PROVISIONING NEW EMPLOYEE")
+      FlehMesh::UI.header("NEW EMPLOYEE PROVISION")
       state = load_state
       domain = state[:domain] || "launchcloud"
       port = state[:ghost_port] || 54321
 
-      key_dir = File.expand_path("./keys/#{name}")
+      # Fix the path to be absolute in the project folder
+      key_dir = File.join(File.expand_path("../..", __FILE__), "keys", name)
       FileUtils.mkdir_p(key_dir)
       key_path = File.join(key_dir, "id_fleh_#{name}")
       
       FlehMesh::UI.step("Generating PIN-Protected SSH credentials...")
-      # Use PIN as passphrase (-N)
       system("ssh-keygen -t ed25519 -f #{key_path} -N '#{pin}' -q")
       
       public_key = File.read("#{key_path}.pub").strip
       
-      FlehMesh::UI.step("Authorizing access on local HomeBase...")
-      authorized_keys_path = File.expand_path("~/.ssh/authorized_keys")
-      File.open(authorized_keys_path, "a") { |f| f.puts("\n# Fleh Mesh: #{name}\n#{public_key}") }
+      FlehMesh::UI.step("Authorizing access on local system...")
+      # Ensure .ssh exists for current user
+      ssh_dir = File.expand_path("~/.ssh")
+      FileUtils.mkdir_p(ssh_dir)
+      FileUtils.chmod(0700, ssh_dir)
       
-      # Save user to state
+      auth_file = File.join(ssh_dir, "authorized_keys")
+      File.open(auth_file, "a") { |f| f.puts("\n# Fleh Mesh: #{name}\n#{public_key}") }
+      FileUtils.chmod(0600, auth_file)
+      
+      # Save user
       users = state[:users] || []
       users << { name: name, created_at: Time.now }
       save_state({ users: users })
 
-      FlehMesh::UI.success("Employee #{name.bold} is authorized.")
+      FlehMesh::UI.success("Employee authorized successfully.")
       
-      puts "\n" + "-" * 60
-      puts " #{'SHELLY SSH CONFIGURATION (GIVE THIS TO EMPLOYEE)'.colorize(:white).bold}"
-      puts "-" * 60
-      puts " 1. Connection: #{'SSH'.colorize(:cyan)}"
-      puts " 2. Host: #{domain}.duckdns.org".colorize(:yellow)
-      puts " 3. Port: #{port}".colorize(:green)
-      puts " 4. User: #{ENV['USER']}".colorize(:green)
-      puts " 5. Private Key: (The file generated in keys/#{name})"
-      puts " 6. PIN/Passphrase: #{pin.colorize(:light_red)} (The employee MUST know this)"
-      puts "-" * 60
+      puts "\n" + "-" * 70
+      puts " #{'SHELLY SSH CREDENTIALS (Sovereign Passphrase Mode)'.colorize(:white).bold}"
+      puts "-" * 70
+      puts "  1. Host: #{domain}.duckdns.org".colorize(:yellow)
+      puts "  2. Port: #{port}".colorize(:green)
+      puts "  3. User: #{ENV['USER']}".colorize(:green)
+      puts "  4. Secret PIN: #{pin.colorize(:light_red)}"
+      puts "  5. Key File: #{key_path}"
+      puts "-" * 70
       FlehMesh::UI.footer
     end
 
     def self.revoke_user(name)
-      FlehMesh::UI.header("REVOKING ACCESS")
+      FlehMesh::UI.header("ACCESS REVOCATION")
       state = load_state
-      users = state[:users] || []
       
-      # Remove from authorized_keys
-      key_path = File.expand_path("./keys/#{name}/id_fleh_#{name}.pub")
+      key_path = File.join(File.expand_path("../..", __FILE__), "keys", name, "id_fleh_#{name}.pub")
       if File.exist?(key_path)
-        pub_key = File.read(key_path).strip
+        pub_key = File.read(key_path).strip.split[1]
         auth_file = File.expand_path("~/.ssh/authorized_keys")
-        content = File.read(auth_file).gsub(/.*#{Regexp.escape(pub_key)}.*/, "")
-        File.write(auth_file, content)
-        FlehMesh::UI.success("Access revoked for #{name}.")
+        if File.exist?(auth_file)
+          lines = File.readlines(auth_file).reject { |line| line.include?(pub_key) }
+          File.write(auth_file, lines.join)
+          FlehMesh::UI.success("Access terminated for #{name}.")
+        end
       end
 
-      users.reject! { |u| u[:name] == name }
+      users = (state[:users] || []).reject { |u| u[:name] == name }
       save_state({ users: users })
       FlehMesh::UI.footer
     end
@@ -127,7 +168,6 @@ module FlehMesh
       port = state[:ghost_port] || 54321
       
       status = { identity: :offline, ghostport: :offline }
-      
       if domain
         begin
           Socket.getaddrinfo("#{domain}.duckdns.org", nil)
