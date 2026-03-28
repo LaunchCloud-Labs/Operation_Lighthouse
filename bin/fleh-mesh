@@ -9,6 +9,17 @@ class FlehMeshCLI < Thor
     super
   end
 
+  desc "setup_id DOMAIN TOKEN", "Configure a free DuckDNS identity (e.g. domain.duckdns.org)"
+  def setup_id(domain, token)
+    FlehMesh::Logic.setup_id(domain, token)
+  end
+
+  desc "punch", "Punch a hole in your router (UPnP) for Port 22"
+  method_option :port, default: 54321, type: :numeric, aliases: '-p'
+  def punch
+    FlehMesh::Logic.punch(options[:port])
+  end
+
   desc "install", "Install the CLI globally as lcl-tunnel and lcl-lighthouse"
   def install
     FlehMesh::Logic.install

@@ -6,6 +6,46 @@ require_relative 'fleh_mesh/ui'
 
 module FlehMesh
   module Logic
+    def self.setup_id(domain, token)
+      FlehMesh::UI.header("CONFIGURING SOVEREIGN IDENTITY")
+      FlehMesh::UI.info("Domain: #{domain}.duckdns.org")
+      
+      config_path = File.expand_path("~/.fleh_mesh.config")
+      File.write(config_path, { domain: domain, token: token }.to_json)
+      
+      FlehMesh::UI.step("Updating DuckDNS record...")
+      res = `curl -s "https://www.duckdns.org/update?domains=#{domain}&token=#{token}&ip="`
+      
+      if res == "OK"
+        FlehMesh::UI.success("Identity is live at #{domain}.duckdns.org!")
+      else
+        FlehMesh::UI.error("Failed to update: #{res}")
+      end
+      FlehMesh::UI.footer
+    end
+
+    def self.punch(port = 54321)
+      FlehMesh::UI.header("GHOSTPORT: ROUTER PUNCH-THROUGH")
+      FlehMesh::UI.info("Internal: 22 -> External: #{port}")
+      
+      FlehMesh::UI.step("Discovering router via UPnP...")
+      # Attempt to use upnpc if available
+      if system("which upnpc > /dev/null 2>&1")
+        res = `upnpc -a $(hostname -I | awk '{print $1}') 22 #{port} TCP`
+        if res =~ /mapping successful/i
+          FlehMesh::UI.success("Router punched successfully!")
+        else
+          FlehMesh::UI.error("Router failed to punch: #{res}")
+          FlehMesh::UI.info("Suggestion: Manually forward Port #{port} to internal Port 22 in your router settings.")
+        end
+      else
+        FlehMesh::UI.error("Missing 'upnpc' tool.")
+        FlehMesh::UI.info("Try: brew install miniupnpc (macOS) or sudo apt install miniupnpc (Linux)")
+        FlehMesh::UI.info("Or manually forward Port #{port} on your router.")
+      end
+      FlehMesh::UI.footer
+    end
+
     def self.install
       FlehMesh::UI.header("GLOBAL INSTALLATION")
       
