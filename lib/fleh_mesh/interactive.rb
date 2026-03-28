@@ -8,7 +8,8 @@ module FlehMesh
       
       loop do
         state = FlehMesh::Logic.load_state
-        domain = state[:domain] || "NOT SET"
+        domain = state[:domain]
+        token = state[:token]
         port = state[:ghost_port] || 54321
         live_status = FlehMesh::Logic.check_live_status
         
@@ -21,11 +22,11 @@ module FlehMesh
         puts status_line + "\n"
 
         choices = [
-          { name: "ðŸš€  One-Click Deployment (Identity + Punch)", value: :quick_start },
+          { name: "ðŸš€  RE-SYNC MESH (Automated Identity + Punch)", value: :quick_start },
           { name: "â„¹  Verify System Readiness", value: :check },
           { name: "ðŸ’¤  Provision New Employee", value: :add_user },
           { name: "ðŸ”¥  Revoke Employee Access", value: :revoke },
-          { name: "âš™ï¸  Advanced Settings (Manual Config)", value: :advanced },
+          { name: "âš™ï¸  Change Identity/Token (Manual)", value: :advanced },
           { name: "âŒ  Exit", value: :exit }
         ]
         
@@ -33,10 +34,19 @@ module FlehMesh
         
         case action
         when :quick_start
-          domain = prompt.ask("Domain Name (e.g. launchcloud):", default: state[:domain])
-          token = prompt.mask("DuckDNS Token:", default: state[:token])
-          FlehMesh::Logic.setup_id(domain, token)
-          FlehMesh::Logic.punch(port)
+          if domain && token
+            FlehMesh::UI.info("Auto-syncing using saved credentials for #{domain}...")
+            FlehMesh::Logic.setup_id(domain, token)
+            FlehMesh::Logic.punch(port)
+          else
+            FlehMesh::UI.error("No credentials found. Please use 'Advanced Settings' to set Domain and Token once.")
+            if prompt.yes?("Set them now?")
+              domain = prompt.ask("Domain Name (e.g. launchcloud):")
+              token = prompt.mask("DuckDNS Token:")
+              FlehMesh::Logic.setup_id(domain, token)
+              FlehMesh::Logic.punch(port)
+            end
+          end
         when :check
           FlehMesh::Logic.check
         when :add_user
@@ -52,21 +62,10 @@ module FlehMesh
             FlehMesh::Logic.revoke_user(name) if prompt.yes?("Are you sure?")
           end
         when :advanced
-          adv_choices = [
-            { name: "Update Identity Only", value: :identity },
-            { name: "Update GhostPort Only", value: :punch },
-            { name: "Back", value: :back }
-          ]
-          adv_action = prompt.select("Advanced:", adv_choices)
-          case adv_action
-          when :identity
-            domain = prompt.ask("Domain Name:", default: state[:domain])
-            token = prompt.mask("Token:", default: state[:token])
-            FlehMesh::Logic.setup_id(domain, token)
-          when :punch
-            port = prompt.ask("Port:", default: 54321, convert: :int)
-            FlehMesh::Logic.punch(port)
-          end
+          domain = prompt.ask("New Domain Name:", default: state[:domain])
+          token = prompt.mask("New DuckDNS Token:", default: state[:token])
+          FlehMesh::Logic.setup_id(domain, token)
+          FlehMesh::UI.success("Credentials updated and saved.")
         when :exit
           FlehMesh::UI.status("âœ‹", "Sovereignty maintained.", :cyan)
           break
