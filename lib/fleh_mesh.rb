@@ -31,7 +31,17 @@ module FlehMesh
     end
 
     def self.get_internal_ip
-      `ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1`.strip
+      # Smart IP Discovery: Ignore Tailscale (100.x) and Loopback (127.x)
+      # Prioritize 192.168, 10.x, and 172.16 ranges
+      ips = Socket.ip_address_list.select { |ai| ai.ipv4? && !ai.ipv4_loopback? }
+      
+      # Filter out Tailscale (usually 100.64.0.0/10)
+      ips.reject! { |ai| ai.ip_address.start_with?("100.") }
+      
+      # Find a standard LAN IP
+      lan_ip = ips.find { |ai| ai.ip_address.start_with?("192.168.") || ai.ip_address.start_with?("10.") || ai.ip_address.start_with?("172.") }
+      
+      lan_ip ? lan_ip.ip_address : ips.first&.ip_address
     end
 
     def self.check
@@ -41,6 +51,7 @@ module FlehMesh
       results << ["SSH Client", (system("which ssh > /dev/null") ? "âœ“".colorize(:green) : "âœ˜".colorize(:red))]
       results << ["SSH Keygen", (system("which ssh-keygen > /dev/null") ? "âœ“".colorize(:green) : "âœ˜".colorize(:red))]
       results << ["UPnP Tool", (system("which upnpc > /dev/null") ? "âœ“".colorize(:green) : "âœ˜".colorize(:yellow))]
+      results << ["Physical LAN IP", get_internal_ip.colorize(:cyan)]
       
       FlehMesh::UI.table(["Component", "Status"], results)
       FlehMesh::UI.footer
@@ -77,7 +88,8 @@ module FlehMesh
           FlehMesh::UI.success("GhostPort is OPEN.")
         else
           FlehMesh::UI.error("AUTOMATIC PUNCH FAILED")
-          puts "\n  #{"YOUR ROUTER IS LOCKED".colorize(:white).bold.on_red}"
+          puts "\n  #{"TAILSCALE INTERFERENCE DETECTED?".colorize(:white).bold.on_yellow}" if ip.start_with?("100.")
+          puts "  #{"YOUR ROUTER IS LOCKED".colorize(:white).bold.on_red}"
           puts "  To enable Shelly access, you must do this ONE TIME manually:"
           puts "  1. Log into your router (usually 192.168.1.1)"
           puts "  2. Go to 'Port Forwarding' or 'Virtual Server'"
