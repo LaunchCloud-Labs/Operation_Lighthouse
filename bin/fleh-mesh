@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+require 'bundler/setup'
+require 'thor'
+require_relative '../lib/fleh_mesh'
+
+class FlehMesh < Thor
+  desc "init_lighthouse IP", "Provisions a new Lighthouse VPS at the given IP"
+  method_option :user, default: 'root', aliases: '-u'
+  def init_lighthouse(ip)
+    FlehMeshLogic.init_lighthouse(ip, options[:user])
+  end
+
+  desc "connect_home LIGHTHOUSE_IP", "Establishes a persistent reverse tunnel to the Lighthouse"
+  method_option :lighthouse_user, default: 'lighthouse', aliases: '-u'
+  method_option :remote_port, default: 2222, type: :numeric, aliases: '-p'
+  def connect_home(lighthouse_ip)
+    FlehMeshLogic.connect_home(lighthouse_ip, options[:lighthouse_user], options[:remote_port])
+  end
+
+  desc "add_user NAME", "Adds a new employee to the mesh"
+  def add_user(name)
+    FlehMeshLogic.add_user(name)
+  end
+end
+
+FlehMesh.start(ARGV)

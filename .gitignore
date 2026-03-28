@@ -1,0 +1,12 @@
+# Local dependencies
+vendor/bundle/
+.bundle/
+
+# Sensitive Keys
+keys/
+.ssh/
+*.pub
+
+# Temp files
+tmp/
+*.log
