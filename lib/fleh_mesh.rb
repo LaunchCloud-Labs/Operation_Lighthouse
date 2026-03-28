@@ -4,24 +4,33 @@ require 'securerandom'
 require 'socket'
 require 'net/http'
 require 'json'
+require 'fileutils'
 require_relative 'fleh_mesh/ui'
 
 module FlehMesh
   module Logic
+    CONFIG_FILE = File.expand_path("~/.fleh_mesh.json")
+
+    def self.save_state(data)
+      state = load_state.merge(data)
+      File.write(CONFIG_FILE, state.to_json)
+    end
+
+    def self.load_state
+      return {} unless File.exist?(CONFIG_FILE)
+      JSON.parse(File.read(CONFIG_FILE), symbolize_names: true)
+    rescue
+      {}
+    end
+
     def self.setup_id(domain, token)
       FlehMesh::UI.header("CONFIGURING SOVEREIGN IDENTITY")
-      FlehMesh::UI.info("Domain: #{domain}.duckdns.org")
-      
-      config_path = File.expand_path("~/.fleh_mesh.config")
-      File.write(config_path, { domain: domain, token: token }.to_json)
+      save_state({ domain: domain, token: token })
       
       FlehMesh::UI.step("Updating DuckDNS record...")
-      
       url = "https://www.duckdns.org/update?domains=#{domain}&token=#{token}&ip="
-      uri = URI(url)
-      
       begin
-        response = Net::HTTP.get(uri)
+        response = Net::HTTP.get(URI(url))
         if response == "OK"
           FlehMesh::UI.success("Identity is live at #{domain}.duckdns.org!")
         else
@@ -30,208 +39,41 @@ module FlehMesh
       rescue => e
         FlehMesh::UI.error("Network error: #{e.message}")
       end
-      
       FlehMesh::UI.footer
     end
 
     def self.punch(port = 54321)
       FlehMesh::UI.header("GHOSTPORT: ROUTER PUNCH-THROUGH")
-      FlehMesh::UI.info("Internal: 22 -> External: #{port}")
+      save_state({ ghost_port: port })
       
       FlehMesh::UI.step("Discovering router via UPnP...")
       if system("which upnpc > /dev/null 2>&1")
-        # Try to get the internal IP address
         internal_ip = Socket.ip_address_list.find { |ai| ai.ipv4? && !ai.ipv4_loopback? }.ip_address
         res = `upnpc -a #{internal_ip} 22 #{port} TCP`
         if res =~ /mapping successful/i || res =~ /Redirecting/i
           FlehMesh::UI.success("Router punched successfully!")
         else
-          FlehMesh::UI.error("Router failed to punch: #{res}")
-          FlehMesh::UI.info("Suggestion: Manually forward Port #{port} to internal Port 22 in your router settings.")
+          FlehMesh::UI.error("Router failed to punch.")
         end
       else
-        FlehMesh::UI.error("Missing 'upnpc' tool.")
-        FlehMesh::UI.info("Try: brew install miniupnpc (macOS) or sudo apt install miniupnpc (Linux)")
-        FlehMesh::UI.info("Or manually forward Port #{port} on your router.")
+        FlehMesh::UI.error("Missing 'upnpc' tool. Please 'brew install miniupnpc'.")
       end
       FlehMesh::UI.footer
     end
 
-    def self.install
-      FlehMesh::UI.header("GLOBAL INSTALLATION")
-      
-      bin_path = File.expand_path(File.join(File.dirname(__FILE__), "../../bin/fleh-mesh"))
-      targets = ["/usr/local/bin/lcl-tunnel", "/usr/local/bin/lcl-lighthouse"]
-      
-      targets.each do |target|
-        FlehMesh::UI.step("Creating symlink: #{target}...")
-        system("sudo ln -sf #{bin_path} #{target}")
-      end
-      
-      FlehMesh::UI.success("Operation Lighthouse is now available globally!")
-      FlehMesh::UI.info("Try running: lcl-tunnel check")
-      FlehMesh::UI.footer
-    end
-
-    def self.check
-      FlehMesh::UI.header("PRE-FLIGHT CHECK")
-      
-      results = []
-      if system("ssh -V > /dev/null 2>&1")
-        results << ["SSH Client", "âœ“ Installed".colorize(:green)]
-      else
-        results << ["SSH Client", "âœ˜ Missing".colorize(:red)]
-      end
-
-      if system("ssh-keygen -V > /dev/null 2>&1")
-        results << ["SSH Keygen", "âœ“ Installed".colorize(:green)]
-      else
-        results << ["SSH Keygen", "âœ˜ Missing".colorize(:red)]
-      end
-
-      if system("systemctl --version > /dev/null 2>&1")
-        results << ["Systemd", "âœ“ Available".colorize(:green)]
-      else
-        results << ["Systemd", "âœ˜ N/A (macOS/Non-Linux)".colorize(:yellow)]
-      end
-
-      FlehMesh::UI.table(["Component", "Status"], results)
-      FlehMesh::UI.footer
-    end
-
-    def self.status(ip, port = 2222)
-      FlehMesh::UI.header("MESH HEALTH DASHBOARD")
-      
-      FlehMesh::UI.spinner("Probing Lighthouse Relay (#{ip})...") do |s|
-        begin
-          Socket.tcp(ip, port, connect_timeout: 5)
-          s.update(title: "Lighthouse Port #{port}: #{'OPEN'.colorize(:green)}")
-        rescue
-          s.update(title: "Lighthouse Port #{port}: #{'CLOSED/FILTERED'.colorize(:red)}")
-        end
-      end
-
-      FlehMesh::UI.info("Local Service: " + (`systemctl is-active fleh-tunnel.service 2>/dev/null`.strip.colorize(:cyan) rescue "Unknown"))
-      FlehMesh::UI.footer
-    end
-
-    def self.audit(ip, user = 'root')
-      FlehMesh::UI.header("SECURITY AUDIT")
-      FlehMesh::UI.info("Auditing Lighthouse: #{ip}")
-
-      Net::SSH.start(ip, user) do |ssh|
-        issues = []
-        if ssh.exec!("grep '^PasswordAuthentication' /etc/ssh/sshd_config") =~ /yes/
-          issues << ["Password Auth", "ENABLED".colorize(:red), "Disable for security"]
-        else
-          issues << ["Password Auth", "DISABLED".colorize(:green), "Good"]
-        end
-
-        if ssh.exec!("grep '^PermitRootLogin' /etc/ssh/sshd_config") =~ /yes/
-          issues << ["Root Login", "ENABLED".colorize(:yellow), "Consider disabling"]
-        else
-          issues << ["Root Login", "LOCKED".colorize(:green), "Good"]
-        end
-
-        FlehMesh::UI.table(["Audit Item", "State", "Recommendation"], issues)
-      end
-      
-      FlehMesh::UI.footer
-    end
-
-    def self.init_lighthouse(ip, user)
-      FlehMesh::UI.header("PROVISIONING LIGHTHOUSE RELAY")
-      FlehMesh::UI.info("Target: #{ip} as #{user}")
-      
-      begin
-        Net::SSH.start(ip, user) do |ssh|
-          FlehMesh::UI.step("Enabling GatewayPorts in sshd_config...")
-          ssh.exec!("sudo sed -i 's/#GatewayPorts no/GatewayPorts yes/' /etc/ssh/sshd_config")
-          ssh.exec!("sudo sed -i 's/GatewayPorts no/GatewayPorts yes/' /etc/ssh/sshd_config")
-          ssh.exec!("sudo systemctl restart ssh")
-
-          FlehMesh::UI.step("Creating 'lighthouse' service user...")
-          ssh.exec!("sudo useradd -m -s /bin/bash lighthouse")
-          ssh.exec!("sudo mkdir -p /home/lighthouse/.ssh")
-          ssh.exec!("sudo chmod 700 /home/lighthouse/.ssh")
-          ssh.exec!("sudo touch /home/lighthouse/.ssh/authorized_keys")
-          ssh.exec!("sudo chmod 600 /home/lighthouse/.ssh/authorized_keys")
-          ssh.exec!("sudo chown -R lighthouse:lighthouse /home/lighthouse/.ssh")
-          
-          FlehMesh::UI.step("Hardening Firewall (Allowing 22, 2222)...")
-          ssh.exec!("sudo ufw allow 22/tcp")
-          ssh.exec!("sudo ufw allow 2222/tcp")
-          ssh.exec!("sudo ufw --force enable")
-        end
-        FlehMesh::UI.success("Lighthouse initialized and hardened at #{ip}!")
-      rescue => e
-        FlehMesh::UI.error("Connection failed: #{e.message}")
-      end
-      
-      FlehMesh::UI.footer
-    end
-
-    def self.connect_home(lighthouse_ip, lighthouse_user, remote_port)
-      FlehMesh::UI.header("LINKING HOMEBASE TO RELAY")
-      FlehMesh::UI.info("Lighthouse: #{lighthouse_ip}")
-      
-      key_path = File.expand_path("~/.ssh/id_fleh_tunnel")
-      unless File.exist?(key_path)
-        FlehMesh::UI.step("Generating master tunnel SSH key...")
-        system("ssh-keygen -t ed25519 -f #{key_path} -N '' -q")
-      end
-      
-      public_key = File.read("#{key_path}.pub").strip
-      
-      begin
-        FlehMesh::UI.step("Authorizing HomeBase on Lighthouse...")
-        Net::SSH.start(lighthouse_ip, 'root') do |ssh|
-          ssh.exec!("echo '#{public_key}' | sudo tee -a /home/lighthouse/.ssh/authorized_keys")
-        end
-
-        FlehMesh::UI.step("Installing systemd tunnel service...")
-        service_content = <<~SERVICE
-          [Unit]
-          Description=Fleh Mesh Reverse Tunnel (Operation Lighthouse)
-          After=network.target
-
-          [Service]
-          User=#{ENV['USER']}
-          ExecStart=/usr/bin/ssh -N -R #{remote_port}:localhost:22 -o "ExitOnForwardFailure=yes" -o "ServerAliveInterval=60" -i #{key_path} #{lighthouse_user}@#{lighthouse_ip}
-          Restart=always
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-        SERVICE
-
-        service_path = "/tmp/fleh-tunnel.service"
-        File.write(service_path, service_content)
-        
-        FlehMesh::UI.step("Activating service (requires sudo)...")
-        system("sudo cp #{service_path} /etc/systemd/system/fleh-tunnel.service")
-        system("sudo systemctl daemon-reload")
-        system("sudo systemctl enable fleh-tunnel.service")
-        system("sudo systemctl start fleh-tunnel.service")
-
-        FlehMesh::UI.success("HomeBase is live on Lighthouse port #{remote_port}!")
-      rescue => e
-        FlehMesh::UI.error("Failed to link HomeBase: #{e.message}")
-      end
-
-      FlehMesh::UI.footer
-    end
-
-    def self.add_user(name)
+    def self.add_user(name, pin)
       FlehMesh::UI.header("PROVISIONING NEW EMPLOYEE")
-      FlehMesh::UI.info("Employee: #{name}")
-      
+      state = load_state
+      domain = state[:domain] || "launchcloud"
+      port = state[:ghost_port] || 54321
+
       key_dir = File.expand_path("./keys/#{name}")
       FileUtils.mkdir_p(key_dir)
       key_path = File.join(key_dir, "id_fleh_#{name}")
       
-      FlehMesh::UI.step("Generating secure SSH credentials...")
-      system("ssh-keygen -t ed25519 -f #{key_path} -N '' -q")
+      FlehMesh::UI.step("Generating PIN-Protected SSH credentials...")
+      # Use PIN as passphrase (-N)
+      system("ssh-keygen -t ed25519 -f #{key_path} -N '#{pin}' -q")
       
       public_key = File.read("#{key_path}.pub").strip
       
@@ -239,19 +81,65 @@ module FlehMesh
       authorized_keys_path = File.expand_path("~/.ssh/authorized_keys")
       File.open(authorized_keys_path, "a") { |f| f.puts("\n# Fleh Mesh: #{name}\n#{public_key}") }
       
+      # Save user to state
+      users = state[:users] || []
+      users << { name: name, created_at: Time.now }
+      save_state({ users: users })
+
       FlehMesh::UI.success("Employee #{name.bold} is authorized.")
       
       puts "\n" + "-" * 60
-      puts " #{'SHELLY SSH CONFIGURATION'.colorize(:white).bold}"
+      puts " #{'SHELLY SSH CONFIGURATION (GIVE THIS TO EMPLOYEE)'.colorize(:white).bold}"
       puts "-" * 60
       puts " 1. Connection: #{'SSH'.colorize(:cyan)}"
-      puts " 2. Host: #{'[YOUR_IDENTITY_DOMAIN].duckdns.org'.colorize(:yellow)}"
-      puts " 3. Port: #{'54321'.colorize(:green)}"
-      puts " 4. User: #{ENV['USER'].colorize(:green)}"
-      puts " 5. Private Key: #{key_path.colorize(:light_black)}"
+      puts " 2. Host: #{domain}.duckdns.org".colorize(:yellow)
+      puts " 3. Port: #{port}".colorize(:green)
+      puts " 4. User: #{ENV['USER']}".colorize(:green)
+      puts " 5. Private Key: (The file generated in keys/#{name})"
+      puts " 6. PIN/Passphrase: #{pin.colorize(:light_red)} (The employee MUST know this)"
       puts "-" * 60
-      
       FlehMesh::UI.footer
+    end
+
+    def self.revoke_user(name)
+      FlehMesh::UI.header("REVOKING ACCESS")
+      state = load_state
+      users = state[:users] || []
+      
+      # Remove from authorized_keys
+      key_path = File.expand_path("./keys/#{name}/id_fleh_#{name}.pub")
+      if File.exist?(key_path)
+        pub_key = File.read(key_path).strip
+        auth_file = File.expand_path("~/.ssh/authorized_keys")
+        content = File.read(auth_file).gsub(/.*#{Regexp.escape(pub_key)}.*/, "")
+        File.write(auth_file, content)
+        FlehMesh::UI.success("Access revoked for #{name}.")
+      end
+
+      users.reject! { |u| u[:name] == name }
+      save_state({ users: users })
+      FlehMesh::UI.footer
+    end
+
+    def self.check_live_status
+      state = load_state
+      domain = state[:domain]
+      port = state[:ghost_port] || 54321
+      
+      status = { identity: :offline, ghostport: :offline }
+      
+      if domain
+        begin
+          Socket.getaddrinfo("#{domain}.duckdns.org", nil)
+          status[:identity] = :online
+        rescue; end
+        
+        begin
+          Socket.tcp("#{domain}.duckdns.org", port, connect_timeout: 2)
+          status[:ghostport] = :online
+        rescue; end
+      end
+      status
     end
   end
 end
