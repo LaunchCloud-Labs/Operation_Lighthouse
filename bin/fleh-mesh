@@ -1,5 +1,14 @@
 #!/usr/bin/env ruby
+
+# --- Operation Lighthouse Sovereign Loader ---
+# This ensures the CLI finds its local gems regardless of who runs it.
+PROJECT_ROOT = File.expand_path('../..', File.realpath(__FILE__))
+ENV['BUNDLE_GEMFILE'] ||= File.join(PROJECT_ROOT, 'Gemfile')
+
+require 'rubygems'
 require 'bundler/setup'
+# ---------------------------------------------
+
 require 'thor'
 require_relative '../lib/fleh_mesh'
 
@@ -7,6 +16,16 @@ class FlehMeshCLI < Thor
   def self.help(shell, subcommand = false)
     puts FlehMesh::UI::BANNER
     super
+  end
+
+  desc "install", "Install the CLI globally as lcl-tunnel and lcl-lighthouse"
+  def install
+    FlehMesh::Logic.install
+  end
+
+  desc "check", "Perform a local pre-flight check"
+  def check
+    FlehMesh::Logic.check
   end
 
   desc "setup_id DOMAIN TOKEN", "Configure a free DuckDNS identity (e.g. domain.duckdns.org)"
@@ -18,16 +37,6 @@ class FlehMeshCLI < Thor
   method_option :port, default: 54321, type: :numeric, aliases: '-p'
   def punch
     FlehMesh::Logic.punch(options[:port])
-  end
-
-  desc "install", "Install the CLI globally as lcl-tunnel and lcl-lighthouse"
-  def install
-    FlehMesh::Logic.install
-  end
-
-  desc "check", "Perform a local pre-flight check"
-  def check
-    FlehMesh::Logic.check
   end
 
   desc "status IP", "Show mesh health and tunnel status"
