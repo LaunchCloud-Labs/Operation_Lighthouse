@@ -31,14 +31,14 @@ module FlehMesh
     end
 
     def self.get_internal_ip
-      # Smart IP Discovery: Ignore Tailscale (100.x) and Loopback (127.x)
-      # Prioritize 192.168, 10.x, and 172.16 ranges
-      ips = Socket.ip_address_list.select { |ai| ai.ipv4? && !ai.ipv4_loopback? }
+      # Smart IP Discovery: Reject ALL 127.x (Loopback) and 100.x (Tailscale)
+      ips = Socket.ip_address_list.select { |ai| ai.ipv4? }
       
-      # Filter out Tailscale (usually 100.64.0.0/10)
+      # Filter out all loopback ranges and Tailscale
+      ips.reject! { |ai| ai.ip_address.start_with?("127.") }
       ips.reject! { |ai| ai.ip_address.start_with?("100.") }
       
-      # Find a standard LAN IP
+      # Prioritize the physical LAN IP
       lan_ip = ips.find { |ai| ai.ip_address.start_with?("192.168.") || ai.ip_address.start_with?("10.") || ai.ip_address.start_with?("172.") }
       
       lan_ip ? lan_ip.ip_address : ips.first&.ip_address
@@ -79,6 +79,14 @@ module FlehMesh
       FlehMesh::UI.header("GHOSTPORT PUNCH")
       save_state({ ghost_port: port })
       
+      # Check if already open first
+      status = check_live_status
+      if status[:ghostport] == :online
+        FlehMesh::UI.success("GhostPort is already OPEN and working. Skipping punch.")
+        FlehMesh::UI.footer
+        return
+      end
+
       if system("which upnpc > /dev/null 2>&1")
         ip = get_internal_ip
         FlehMesh::UI.step("Punching router for #{ip}...")
@@ -88,8 +96,7 @@ module FlehMesh
           FlehMesh::UI.success("GhostPort is OPEN.")
         else
           FlehMesh::UI.error("AUTOMATIC PUNCH FAILED")
-          puts "\n  #{"TAILSCALE INTERFERENCE DETECTED?".colorize(:white).bold.on_yellow}" if ip.start_with?("100.")
-          puts "  #{"YOUR ROUTER IS LOCKED".colorize(:white).bold.on_red}"
+          puts "\n  #{"YOUR ROUTER IS LOCKED".colorize(:white).bold.on_red}"
           puts "  To enable Shelly access, you must do this ONE TIME manually:"
           puts "  1. Log into your router (usually 192.168.1.1)"
           puts "  2. Go to 'Port Forwarding' or 'Virtual Server'"
@@ -170,6 +177,7 @@ module FlehMesh
           status[:identity] = :online
         rescue; end
         begin
+          # Check the domain on the ghost port
           Socket.tcp("#{state[:domain]}.duckdns.org", state[:ghost_port], connect_timeout: 2)
           status[:ghostport] = :online
         rescue; end
